@@ -1,0 +1,68 @@
+pipeline {
+    agent { label 'windows' }
+         environment {
+                password = credentials('CREDENCIAL_JENKINS')
+                site = 'Github.jodemi.com.br'
+                aws_access = 'ACCESS'
+                aws_secretkey = 'KEY'
+                email = 'email@jodemi.com.br
+                origem = 'XXX'
+                destino = 'YYY'
+                hostname = 'Servidor Destino'
+            }
+        stages {
+            stage('Gerar Certificado') {
+                steps {
+                    powershell (
+                            'whoami' )
+                    powershell (
+                            'hostname' )
+                       powershell """
+                            \$win_acne = "C:\\jenkins\\wacs\\wacs.exe"
+                            & \$win_acne --target manual --host \$ENV:site --store pfxfile --pfxfilepath 'C:\\jenkins\\wacs\\certificados' --pfxpassword 'PASSWORD' --sslport 443 --validationmode dns-01 --validation route53 --route53accesskeyid \$ENV:aws_access --route53secretaccesskey \$ENV:aws_secretkey --emailaddress \$ENV:email --accepttos --force
+                        """                }
+            }
+            stage('Copiar para servidor destino') {
+                steps {
+                    powershell (
+                            'whoami'
+                            )
+                    powershell """
+                        \$senha = ConvertTo-SecureString \$ENV:password_PSW -AsPlainText -Force
+                        \$Credential = New-Object System.Management.Automation.PSCredential (\$ENV:password_USR, \$senha)
+                        \$SessionDetails = New-PSSession -ComputerName \$ENV:hostname -Credential \$Credential
+                        Copy-item \$ENV:origem  \$ENV:destino -ToSession \$SessionDetails -recurse -ErrorAction SilentlyContinue
+                        Remove-PSSession -Session \$SessionDetails
+                        """
+                }
+            }
+            stage('Importa e aplica') {
+                steps {
+                    powershell (
+                            'whoami'
+                            )
+                    powershell """
+                        \$senha = ConvertTo-SecureString \$ENV:password_PSW -AsPlainText -Force
+                        \$Credential = New-Object System.Management.Automation.PSCredential (\$ENV:password_USR, \$senha)
+                        \$SessionDetails = New-PSSession -ComputerName "\$ENV:hostname" -Credential \$Credential
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {(certutil -p PASSWORD –importpfx C:\\jenkins\\certificados\\github.jodemi.com.br.pfx)}
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$PFXPath='C:\\jenkins\\certificados\\github.jodemi.com.br.pfx'} 
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$PFXPassword='PASSWORD'}
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$PFX=New-Object -TypeName 'System.Security.Cryptography.X509Certificates.X509Certificate2Collection'}
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$PFX.Import(\$PFXPath,\$PFXPassword,[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet)}
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$cert=(\$PFX | Select -First 1 | Select -expand Thumbprint) }
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {\$guid = ([guid]::NewGuid().ToString("B"))}
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {netsh http delete sslcert ipport=192.168.0.1:443}
+                        Start-Sleep -s 2
+                        Invoke-Command -Session \$SessionDetails -ScriptBlock {netsh http add sslcert ipport=192.168.0.1:443 certhash=\$cert appid=\$guid}
+                            Remove-PSSession -Session \$SessionDetails
+                        """
+                }
+            }
+       }
+       post {
+        always {
+            hangoutsNotify message: "Visualizar Projeto .NET $JOB_NAME ID $BUILD_NUMBER - $currentBuild.currentResult ", token:'XXXXXX',threadByJob:'True'
+        }
+    }
+}
